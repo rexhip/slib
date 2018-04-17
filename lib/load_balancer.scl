@@ -95,6 +95,9 @@ VERSION : 0.1
 BEGIN
 	//   Load balancer: 
 	//   
+	//   https://github.com/rexhip/slib/
+	//   MIT-license
+	//
 	// - If devices (eg. pumps) work in parallell, the function will start or stop devices
 	//   to operate as the demand increase or decrease.
 	// - A devices will be added for operation, if #input is above a certain value for a
