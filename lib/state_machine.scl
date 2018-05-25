@@ -20,9 +20,10 @@ VERSION : 0.1
 
 BEGIN
 	// https://github.com/rexhip/
+	//
 	// State machine timer.
 	// 
-	// The timeren is reseted if:
+	// The timer is reseted if:
 	// - Pt hasen't got a new value (for each scan)
 	// - New state
 	
@@ -53,6 +54,7 @@ VERSION : 0.1
 
 BEGIN
 	// https://github.com/rexhip/
+	// 
 	// Time to string.
 	
 	#t += #in;
