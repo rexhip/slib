@@ -1,0 +1,126 @@
+﻿FUNCTION_BLOCK "state_machine_timer"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      state : Int;   // state machine
+   END_VAR
+
+   VAR_OUTPUT 
+      q : Bool;   // out
+      rt : Time;   // Remaining time
+      et : Time;
+   END_VAR
+
+   VAR 
+      pt : Time;   // input time
+      "timer" {OriginalPartName := 'IEC_TIMER'; LibVersion := '1.0'} : IEC_TIMER;
+      old_state : Int;
+   END_VAR
+
+
+BEGIN
+	// State machine timer.
+	// 
+	// The timeren is reseted if:
+	// - Pt hasen't got a new value (for each scan)
+	// - New state
+	
+	#timer.TON(IN := #pt <> T#0s
+	           (* *)AND #state = #old_state,
+	           PT := #pt,
+	           Q => #q);
+	
+	#et := #timer.ET;
+	#rt := #pt - #et;
+	
+	#pt := T#0s;
+	#old_state := #state;
+	
+END_FUNCTION_BLOCK
+
+FUNCTION "time2str" : String
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      in : Time;
+   END_VAR
+
+   VAR_TEMP 
+      t {OriginalPartName := 'DTL'; LibVersion := '1.0'} : DTL;
+   END_VAR
+
+
+BEGIN
+	// Time to string.
+	
+	#t += #in;
+	#t.DAY -= 1;
+	#time2str := ''; // (Avoiding compilation warnings)
+	
+	IF #t.DAY <> 0 THEN
+	    #time2str := CONCAT(IN1 := RIGHT(IN := USINT_TO_STRING(#t.DAY),
+	                                     L := 1 + BOOL_TO_INT(#t.DAY > 9)),
+	                        IN2 := 'd ');
+	END_IF;
+	IF #t.HOUR <> 0 OR LEN(#time2str) <> 0 THEN
+	    #time2str := CONCAT(IN1 := #time2str,
+	                        IN2 := RIGHT(IN := USINT_TO_STRING(#t.HOUR),
+	                                     L := 1 + BOOL_TO_INT(#t.HOUR > 9)),
+	                        IN3 := 'h ');
+	END_IF;
+	IF #t.MINUTE <> 0 OR LEN(#time2str) <> 0 THEN
+	    #time2str := CONCAT(IN1 := #time2str,
+	                        IN2 := RIGHT(IN := USINT_TO_STRING(#t.MINUTE),
+	                                     L := 1 + BOOL_TO_INT(#t.MINUTE > 9)),
+	                        IN3 := 'm ');
+	END_IF;
+	#time2str := CONCAT(IN1 := #time2str,
+	                    IN2 := RIGHT(IN := USINT_TO_STRING(#t.SECOND),
+	                                 L := 1 + BOOL_TO_INT(#t.SECOND > 9)),
+	                    IN3 := 's');
+	
+END_FUNCTION
+
+FUNCTION_BLOCK "example_state_machine"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      state : Int;
+      "timer" : "state_machine_timer";
+      "__condition_1__" : Bool := true;
+      "__condition_2__" : Bool := true;
+      HMI_status : String[50];
+   END_VAR
+
+
+BEGIN
+	// State machine example.
+	
+	CASE #state OF
+	    0:  // Next state after 14 sec.
+	        #timer.pt := T#14s; 
+	        #state += BOOL_TO_INT(#timer.q);
+	        
+	        #HMI_status := CONCAT(IN1 := 'State 0, remaining time: ',
+	                              IN2 := "time2str"(#timer.rt), IN3 := '.');
+	        
+	    1:  // Next state after 7 sec, and 'condition_1' is true.
+	        #timer.pt := T#7s;
+	        #state += BOOL_TO_INT(#timer.q AND #"__condition_1__");
+	        
+	        #HMI_status := 'State 1.';
+	        
+	    2:  // Back to state 0, when 'condition_2' has been true
+	        // for 8 sec continuously.
+	        IF #"__condition_2__" THEN
+	            #timer.pt := T#8s;
+	            #state := SEL(G := #timer.q, IN0 := #state, IN1 := 0);
+	        END_IF;
+	        
+	        #HMI_status := 'State 2.';
+	END_CASE;
+	
+	#timer(state := #state); // Run the timer code.
+	
+END_FUNCTION_BLOCK
+
