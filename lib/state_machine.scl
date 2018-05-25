@@ -19,6 +19,7 @@ VERSION : 0.1
 
 
 BEGIN
+	// https://github.com/rexhip/
 	// State machine timer.
 	// 
 	// The timeren is reseted if:
@@ -51,6 +52,7 @@ VERSION : 0.1
 
 
 BEGIN
+	// https://github.com/rexhip/
 	// Time to string.
 	
 	#t += #in;
@@ -94,6 +96,7 @@ VERSION : 0.1
 
 
 BEGIN
+	// https://github.com/rexhip/
 	// State machine example.
 	
 	CASE #state OF
