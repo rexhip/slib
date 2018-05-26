@@ -1,0 +1,48 @@
+﻿FUNCTION "set_reset_rd" : Void
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      s : Bool;
+      r : Bool;
+   END_VAR
+
+   VAR_IN_OUT 
+      q : Bool;
+   END_VAR
+
+
+BEGIN
+	// Set-reset (sd = reset dominant)
+	
+	IF #r THEN
+	    #q := false;
+	ELSIF #s THEN
+	    #q := true;
+	END_IF;
+	
+END_FUNCTION
+
+FUNCTION "set_reset_sd" : Void
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      s : Bool;
+      r : Bool;
+   END_VAR
+
+   VAR_IN_OUT 
+      q : Bool;
+   END_VAR
+
+
+BEGIN
+	// Set-reset (sd = reset dominant)
+	
+	IF #s THEN
+	    #q := true;
+	ELSIF #r THEN
+	    #q := false;
+	END_IF;
+	
+END_FUNCTION
+
