@@ -46,3 +46,26 @@ BEGIN
 	
 END_FUNCTION
 
+FUNCTION "syncReal" : Void
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_IN_OUT 
+      var1 : Real;   // primary
+      var2 : Real;   // secoundary
+      memory : Real;
+   END_VAR
+
+
+BEGIN
+	// Make two variables have the same value. If one change, the
+	// value will be transfer to the other one.
+	
+	IF #var1 = #memory THEN
+	    #var1 := #var2;
+	ELSE
+	    #var2 := #var1;
+	END_IF;
+	
+	#memory := #var2;
+	
+END_FUNCTION
