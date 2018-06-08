@@ -1,0 +1,806 @@
+﻿TYPE "valveIoUdt"
+VERSION : 0.1
+   STRUCT
+      in { ExternalWritable := 'False'} : Struct
+         fullyOpen { ExternalWritable := 'False'} : Bool;
+         fullyClosed { ExternalWritable := 'False'} : Bool;
+         pos { ExternalWritable := 'False'} : Real;
+         posError { ExternalWritable := 'False'} : Bool;
+      END_STRUCT;
+      out { ExternalWritable := 'False'} : Struct
+         open { ExternalWritable := 'False'} : Bool;
+         close { ExternalWritable := 'False'} : Bool;
+      END_STRUCT;
+   END_STRUCT;
+
+END_TYPE
+
+TYPE "valveAnalogConfUdt"
+VERSION : 0.1
+   STRUCT
+      toggleTimeBreak { S7_SetPoint := 'True'} : Time := T#2s;   // A short break if valve change direction.
+      regMode { S7_SetPoint := 'True'} : Bool;   // Most be activated if valve is controlled by a PID. Makes timebreaks between each move.
+      regModeTimeBreak { S7_SetPoint := 'True'} : Time := T#30s;   // Wait time before a new movment when valve is regMode
+      regModeMinOffset { S7_SetPoint := 'True'} : Real := 3.0;   // Min. offset before a movment is done when valve is in regMode.
+      feilSafeAction { S7_SetPoint := 'True'} : SInt := 2;   // 0=noAction, 1=open, 2=close.
+      autoReset { S7_SetPoint := 'True'} : Bool := true;   // Reset on SP change or by jog valve, else iReset need to be set true.
+      simFullyOpenWithPos { S7_SetPoint := 'True'} : Bool;   // Use the pos-signal to determined if the valve is fully open.
+      simFullyClosedWithPos { S7_SetPoint := 'True'} : Bool;   // Use the pos-signal to determined if the valve is fully closed.
+      fullyOpenPosLim { S7_SetPoint := 'True'} : Real := 96.0;   // Above this position is seen as fully open
+      fullyClosedPosLim { S7_SetPoint := 'True'} : Real := 0.7;   // Under this position is seen as fully close
+      gentleOpenEnable { S7_SetPoint := 'True'} : Bool;   // Open valve with time breaks, this may prevent damange on equipment.
+      gentleCloseEnable { S7_SetPoint := 'True'} : Bool;   // Close valve with time breaks, this may prevent damange on equipment.
+      gentleAlsoOnFailSafe { S7_SetPoint := 'True'} : Bool := true;   // The gentle function will also be enabled on fail safe mode.
+      gentleActivteLowLimit { S7_SetPoint := 'True'} : Real := 15.0;   // Gentle is only activate under this limit.
+      gentleTimeRun { S7_SetPoint := 'True'} : Time := T#2s500ms;   // Valve movment time, on gentle open or close.
+      gentleTimePause { S7_SetPoint := 'True'} : Time := T#8s;   // Time break between each movment on gnetle open or close.
+      preStop { S7_SetPoint := 'True'} : Real := 0.3;   // Stop the movment a bit before SP is reached, so the valve will stop exactly at SP.
+      endPosWithoutPreStop { S7_SetPoint := 'True'} : Real := 3.0;   // The few last procentages on close and open, there is no preStop
+      longTimeout { S7_SetPoint := 'True'} : Time := T#4m;   // If the valve hasn't reached it's position within this time, then there is something wrong.
+      quickTimeoutEnable { S7_SetPoint := 'True'} : Bool := true;   // Check at interval that the valve move towards SP.
+      quickTimeoutIntervalCheaks { S7_SetPoint := 'True'} : Time := T#8s;   // Time interval between each check.
+      qucikTimeoutMinMovement { S7_SetPoint := 'True'} : Real := 2.0;   // Min movment between each check, else error.
+      spAvoidDeadLook { S7_SetPoint := 'True'} : Bool := false;   // SP don't need a change to be activated, just need a smal offset.
+   END_STRUCT;
+
+END_TYPE
+
+TYPE "operatingTimeUdt"
+VERSION : 0.1
+   STRUCT
+      operatingTime : UDInt;
+      startCnt : UDInt;
+      in : Bool;
+      oldSec : USInt;
+   END_STRUCT;
+
+END_TYPE
+
+FUNCTION_BLOCK "motorValveAproxPos"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_IN_OUT 
+      io : "valveIoUdt";
+   END_VAR
+
+   VAR 
+      conf : Struct
+         maxAvoid : Real := 4.0;
+      END_STRUCT;
+      oldSecAndMsec10 : UInt;
+      posPrT : UInt;
+      "timer" {OriginalPartName := 'IEC_TIMER'; LibVersion := '1.0'} : IEC_TIMER;
+      first_scan : Bool := true;
+      RTRIG_fullyOpen {OriginalPartName := 'R_TRIG_1200'; LibVersion := '1.0'} : R_TRIG;
+      RTRIG_fullyClosed {OriginalPartName := 'R_TRIG_1200'; LibVersion := '1.0'} : R_TRIG;
+      rangeTime : Time;
+      tries : Array[0..7] of Time;
+   END_VAR
+
+   VAR_TEMP 
+      e : Int;
+      rd_sys_t {OriginalPartName := 'DTL'; LibVersion := '1.0'} : DTL;
+      secAndMsec10 : UInt;
+      sPos : Int;
+      t : Int;
+      c : Int;
+      mx : Time;
+      mn : Time;
+   END_VAR
+
+
+BEGIN
+	// For valve without position sensor. Calculate the position based on long
+	// time the valve has been opening and closing.
+	
+	(* FUNCTION NOT FINISHED...
+	
+	#e := RD_SYS_T(#rd_sys_t);
+	#secAndMsec10 := #rd_sys_t.SECOND * 100 + UDINT_TO_UINT(#rd_sys_t.NANOSECOND / 10000);
+	#t := USINT_TO_INT( (#secAndMsec10 - #oldSecAndMsec10 + 6000) MOD 6000);
+	#oldSecAndMsec10 := #secAndMsec10;
+	
+	#io.in.posError := #io.in.posError AND NOT #first_scan;
+	
+	#RTRIG_fullyOpen(CLK := #io.in.fullyOpen);
+	#RTRIG_fullyClosed(CLK := #io.in.fullyClosed);
+	
+	IF #RTRIG_fullyOpen.Q OR #RTRIG_fullyClosed.Q THEN
+	    RESET_TIMER(#timer);
+	    #timer.PT := T#10m;
+	END_IF;
+	
+	
+	
+	#c := 7 - 1;
+	WHILE #c >= 0 DO
+	    #tries[#c + 1] := #tries[#c];
+	    #c -= 1;
+	END_WHILE;
+	#tries[0] := T#123s;
+	
+	#mn := T#24d;
+	FOR #c := 1 TO 6 BY 2 DO
+	    #mx := MAX(IN1 := #tries[#c], IN2 := #mx);
+	    #mn := MIN(IN1 := #tries[#c], IN2 := #mn);
+	END_FOR;
+	// #mx - #mn ;
+	
+	(*IF #first_scan THEN
+	    #io.in.posError := true;
+	END_IF;*)
+	
+	
+	IF #io.out.open XOR #io.out.close THEN
+	    #sPos := SEL(G := #io.out.close, IN0 := #sPos + #t, IN1 := #sPos - #t);
+	END_IF;
+	
+	
+	// #io.in.pos
+	
+	#first_scan := false;
+	
+	*)
+END_FUNCTION_BLOCK
+
+TYPE "valveHmiUdt"
+VERSION : 0.1
+   STRUCT
+      conf : "valveAnalogConfUdt";
+      io : "valveIoUdt";
+      error : Struct
+         timeout : Bool;
+         posError : Bool;
+      END_STRUCT;
+      cmd : Struct
+         reset : Bool;
+         man { S7_SetPoint := 'True'} : Bool;   // false=>auto
+         jogOpen : Bool;
+         jogClose : Bool;
+         openFully : Bool;
+         closeFully : Bool;
+      END_STRUCT;
+      SP { S7_SetPoint := 'True'} : Real;
+      operatingTime : "operatingTimeUdt";
+   END_STRUCT;
+
+END_TYPE
+
+FUNCTION_BLOCK "motorValveAnalog"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      iSP : Real;   // 0-100 %,
+      iFailSafe : Bool;   // Open or close the valve entirly, set inside conf.
+      iInterlook : Bool;   // Stop movement, valve will continue when input is set back false.
+      iStop : Bool;   // Stop movement, also after var. is back false.
+      iJogOpen : Bool;   // Move the valve towards open when true, has priority over SP.
+      iJogClose : Bool;   // Move the valve towards close when true, has priority over SP.
+      iReset : Bool;   // Reset timeout.
+   END_VAR
+
+   VAR_OUTPUT 
+      qTimeout : Bool;   // (quick and long timeout)
+   END_VAR
+
+   VAR_IN_OUT 
+      conf : "valveAnalogConfUdt";   // Configuration parameters
+      io : "valveIoUdt";   // Fyzical in- and outputs.
+   END_VAR
+
+   VAR 
+      statIn { ExternalWritable := 'False'} : Struct
+         fullyOpen { ExternalWritable := 'False'} : Bool;
+         fullyClosed { ExternalWritable := 'False'} : Bool;
+      END_STRUCT;
+   END_VAR
+   VAR DB_SPECIFIC
+      out { ExternalWritable := 'False'} : Struct
+         qucikTimeout { ExternalWritable := 'False'} : Bool;
+         longTimeout { ExternalWritable := 'False'} : Bool;
+      END_STRUCT;
+   END_VAR
+   VAR 
+      action : SInt;   // 1=open, 2=close
+      actionOut : SInt;
+      oldAction : SInt;
+      oldActionOut : SInt;
+      oldSetpoint : Real;
+      RTIRG_iFailSafe {OriginalPartName := 'R_TRIG_1200'; LibVersion := '1.0'; ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : R_TRIG;
+      RTIRG_iReset {OriginalPartName := 'R_TRIG_1200'; LibVersion := '1.0'; ExternalWritable := 'False'} : R_TRIG;
+      RTIRG_jog {OriginalPartName := 'R_TRIG_1200'; LibVersion := '1.0'; ExternalWritable := 'False'} : R_TRIG;
+      TP_toggleOut {OriginalPartName := 'IEC_TIMER'; LibVersion := '1.0'; ExternalWritable := 'False'} : IEC_TIMER;
+      TON_gentle {OriginalPartName := 'IEC_TIMER'; LibVersion := '1.0'; ExternalWritable := 'False'} : IEC_TIMER;
+      TONR_timeout {OriginalPartName := 'IEC_TIMER'; LibVersion := '1.0'; ExternalWritable := 'False'} : IEC_TIMER;
+      TON_regModeWait {OriginalPartName := 'IEC_TIMER'; LibVersion := '1.0'; ExternalWritable := 'False'} : IEC_TIMER;
+      TONR_quckTimeout {OriginalPartName := 'IEC_TIMER'; LibVersion := '1.0'; ExternalWritable := 'False'} : IEC_TIMER;
+      quickTimeoutLastPos { ExternalWritable := 'False'} : Real;
+      gentleAction { ExternalWritable := 'False'} : Bool;
+   END_VAR
+
+   VAR_TEMP 
+      pre : Real;
+      reset : Bool;
+   END_VAR
+
+   VAR CONSTANT 
+      NO_ACTION : SInt := 0;
+      OPEN : SInt := 1;
+      CLOSE : SInt := 2;
+   END_VAR
+
+
+BEGIN
+	// Valve with analog feedback.
+	
+	REGION End-pos-switches
+	    // Use the position signal instead of the end-limit-switches to 
+	    // determined if the valve is fully open or fully closed.
+	    // Usefull if the valve dosen't have end-limit-switches or a
+	    // switch dosen't work and temperary quick fix is needed.
+	    #statIn.fullyOpen := SEL(G := #conf.simFullyOpenWithPos,
+	                             IN0 := #io.in.fullyOpen,
+	                             IN1 := #io.in.pos > #conf.fullyOpenPosLim
+	                             AND NOT #io.in.posError);
+	    #statIn.fullyClosed := SEL(G := #conf.simFullyClosedWithPos,
+	                               IN0 := #io.in.fullyClosed,
+	                               IN1 := #io.in.pos < #conf.fullyClosedPosLim
+	                               AND NOT #io.in.posError);
+	END_REGION
+	
+	//R-TRIG'S
+	#RTIRG_iReset(CLK := #iReset);
+	#RTIRG_iFailSafe(CLK := #iFailSafe); 
+	#RTIRG_jog(CLK := #iJogOpen XOR #iJogClose);
+	
+	REGION Quick-timeout  
+	    // Cheak at intervals that the position moves towards the setpoint.
+	    // This give a quicker feedback, then the long timeout.
+	    IF #oldAction <> #action OR #RTIRG_jog.Q OR #RTIRG_iFailSafe.Q THEN
+	        RESET_TIMER(#TONR_quckTimeout);
+	        #quickTimeoutLastPos := #io.in.pos;
+	    ELSIF #action <> #NO_ACTION AND #conf.quickTimeoutEnable THEN
+	        #TONR_quckTimeout.TONR(IN := #io.out.open OR #io.out.close,
+	                               PT := #conf.quickTimeoutIntervalCheaks);
+	        IF #TONR_quckTimeout.Q THEN
+	            #out.qucikTimeout :=
+	            ABS(#quickTimeoutLastPos - #io.in.pos) < #conf.qucikTimeoutMinMovement;
+	            RESET_TIMER(#TONR_quckTimeout);
+	            
+	            // Only store the old value if the valve has done progress towards the SP.
+	            IF #action = #OPEN AND #io.in.pos > #quickTimeoutLastPos
+	                OR #action = #CLOSE AND #io.in.pos < #quickTimeoutLastPos
+	            THEN
+	                #quickTimeoutLastPos := #io.in.pos;
+	            END_IF;
+	        END_IF;
+	    END_IF;
+	END_REGION
+	
+	REGION LongTimeout-and-reset
+	    // Max time the valve can operate before timeout, and the valve will stop.
+	    #TONR_timeout.TONR(IN := #io.out.open OR #io.out.close,
+	                       PT := #conf.longTimeout,
+	                       Q => #out.longTimeout);
+	    
+	    // Reset timeout
+	    IF #iJogOpen OR #iJogClose THEN
+	        #reset := #RTIRG_jog.Q AND
+	        (* *)(#conf.autoReset OR NOT #out.longTimeout AND NOT #out.qucikTimeout) ;
+	    ELSE
+	        // On autoReset, reset timeout on every setpoint change.
+	        #reset := #conf.autoReset AND NOT #conf.regMode AND #iSP <> #oldSetpoint ;
+	    END_IF;
+	    IF #RTIRG_iReset.Q OR #RTIRG_iFailSafe.Q OR #reset THEN
+	        RESET_TIMER(#TONR_timeout);
+	        RESET_TIMER(#TONR_quckTimeout);
+	        #out.qucikTimeout := false;
+	        #qTimeout := false;
+	    END_IF;
+	END_REGION
+	
+	REGION Decide
+	    // Error, timeout, failSafe and Interlook.
+	    IF #TONR_timeout.Q THEN
+	        #action := #NO_ACTION;
+	    ELSIF #iFailSafe THEN // Timeout will be reseted once if iFailSafe is activated.
+	        #action := #conf.feilSafeAction;
+	    ELSIF #iStop OR #io.in.posError OR #out.qucikTimeout THEN
+	        #action := #NO_ACTION;
+	        // ==========================================================================
+	        // JOG-mode
+	    ELSIF #iJogOpen OR #iJogClose THEN
+	        // Open or close the valve little by little. When either of the jog
+	        // inputs are true. This way of controlling the valve has priority
+	        // over setpoint (bellow).
+	        RESET_TIMER(#TON_regModeWait);
+	        IF #iJogOpen AND #iJogClose THEN
+	            #action := #NO_ACTION;
+	        ELSIF #iJogOpen THEN
+	            #action := #OPEN;
+	        ELSIF #iJogClose THEN
+	            #action := #CLOSE;
+	        ELSE
+	            // ==========================================================================
+	            // SP-mode:
+	            // Controll the valve by a setpoint, using the feedback position to 
+	            // determined if the valve should open or close. SP should be given in percent.
+	            
+	            IF #conf.spAvoidDeadLook AND NOT #conf.regMode
+	                AND ABS(#iSP - #oldSetpoint) > #conf.regModeMinOffset
+	                // If a failSafe situation has occured, there may be a dead look situation for
+	                // SP, becouse there is no change. By eneabling spAvoidDeadLook, sp would not 
+	                // need to change for it to activated. There is stil a need for a smal offset
+	                // to avoid that the valve move all the times. This is convient if the valve is
+	                // controlled by a state machine.
+	                
+	                OR #iSP <> #oldSetpoint 
+	                (* *)AND (NOT #conf.regMode
+	                (*   *)OR #TON_regModeWait.Q
+	                (*      *)AND (ABS(#iSP - #io.in.pos) > #conf.regModeMinOffset
+	                (*         *)OR #io.in.pos > #conf.fullyOpenPosLim - #conf.endPosWithoutPreStop
+	                (*         *)OR #io.in.pos < #conf.endPosWithoutPreStop))
+	                // regMode should be used when a valve is controlled by a PID.
+	                // When the valve is in regMode, then there will be a time break between each 
+	                // movment. And there is a need a certain offset before an ajustment is done.
+	                // This behavior significantly prevents wear on the valve. If the valve is not
+	                // in regMode, then each change in SP will make the valve operate.
+	            THEN
+	                IF #iSP > #io.in.pos THEN
+	                    #action := #OPEN;
+	                ELSIF #iSP < #io.in.pos THEN
+	                    #action := #CLOSE;
+	                END_IF;
+	            END_IF;
+	            
+	            // --------------------------------------
+	            // SP-reached-pos:
+	            // 
+	            // In the main area where the valve operate, it will shut off the outputs, a
+	            // tiny bit before it reach the SP. This make the valve, stop exacly on SP.
+	            // In the area of almost closed and almost open this function is disable,
+	            // this makes sure that it's possible to open or close the valve entirly.
+	            #pre := SEL(G := #iSP > #conf.fullyOpenPosLim - #conf.endPosWithoutPreStop
+	                        OR #iSP < #conf.endPosWithoutPreStop,
+	                        IN0 := #conf.preStop, IN1 := 0);
+	            // Detect reached position
+	            IF #action = #OPEN AND (#io.in.pos > #iSP - #pre OR #io.in.fullyOpen)
+	                OR #action = #CLOSE AND (#io.in.pos < #iSP + #pre OR #io.in.fullyClosed)
+	            THEN
+	                #action := #NO_ACTION;
+	                RESET_TIMER(#TON_regModeWait);
+	            END_IF;
+	        END_IF;
+	    END_IF;
+	    // In regMode this timer need to finnish before a new movement can be done.
+	    #TON_regModeWait.TON(IN := true, PT := #conf.regModeTimeBreak);
+	END_REGION
+	
+	REGION Gentle
+	    // If a big valve closes or open to fast, it can damage the pipes or other
+	    // equipment. This section make time breaks on closing or opening. 
+	    IF #io.in.pos < #conf.gentleActivteLowLimit // ->
+	        // -> The function is only active under a ceratain position limit.
+	        AND (NOT #iFailSafe OR #conf.gentleAlsoOnFailSafe)
+	        // AlsoOnFailSafe: It's possible to disable the function for emergencies
+	        // by setting the value false.
+	        AND (#conf.gentleOpenEnable AND #action = #OPEN
+	        (* *)OR #conf.gentleOpenEnable AND #action = #CLOSE)
+	    THEN
+	        #TON_gentle.TON(IN := true,
+	                        PT := SEL(G := #gentleAction, // Toggle times
+	                                  IN0 := #conf.gentleTimeRun,
+	                                  IN1 := #conf.gentleTimePause));
+	        IF #TON_gentle.Q THEN
+	            #gentleAction := NOT #gentleAction;
+	            RESET_TIMER(#TON_gentle);
+	        END_IF;
+	        #actionOut := SEL(G := #gentleAction, // Toggle action
+	                         IN0 := #action, IN1 := #NO_ACTION);
+	    ELSE
+	        RESET_TIMER(#TON_gentle);
+	        #gentleAction := false;
+	        // If the carefully-function is disabled, then just forward
+	        // the action value to the next stage.
+	        #actionOut := #action; 
+	    END_IF;
+	END_REGION
+	
+	REGION Output
+	    // Make a smal time break when valve change direction. This make sure that
+	    // that both outputs are not active at the same time.
+	    #TP_toggleOut.TP(IN := #actionOut <> #oldActionOut AND #oldActionOut <> #NO_ACTION,
+	                  PT := #conf.toggleTimeBreak);
+	    // Outputs
+	    IF #TP_toggleOut.Q THEN
+	        #io.out.open := false;
+	        #io.out.close := false;
+	    ELSIF #iFailSafe THEN
+	        // When failSafe is active both the limit-switch and positon signal
+	        // most indicate that the valve is in correct position.
+	        #io.out.open := #actionOut = #OPEN AND
+	        (* *)(NOT #io.in.fullyOpen OR #io.in.pos < #conf.fullyOpenPosLim);
+	        #io.out.close := #actionOut = #CLOSE AND
+	        (* *)(NOT #io.in.fullyClosed OR #io.in.pos < #conf.fullyClosedPosLim);        
+	    ELSIF #iInterlook THEN
+	        #io.out.open := false;
+	        #io.out.close := false;
+	    ELSE
+	        #io.out.open := #actionOut = #OPEN AND NOT #io.in.fullyOpen;
+	        #io.out.close := #actionOut = #CLOSE AND NOT #io.in.fullyClosed;
+	    END_IF;
+	END_REGION
+	
+	REGION Old
+	    #oldSetpoint := #iSP;
+	    #oldAction := #action;
+	    #oldActionOut := #actionOut;
+	END_REGION 
+	
+	#qTimeout := #out.qucikTimeout OR #out.longTimeout;
+	
+END_FUNCTION_BLOCK
+
+FUNCTION "operatingTime" : Void
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      in : Bool;
+   END_VAR
+
+   VAR_IN_OUT 
+      opr : "operatingTimeUdt";
+   END_VAR
+
+   VAR_TEMP 
+      e : Int;
+      rdSysT {OriginalPartName := 'DTL'; LibVersion := '1.0'} : DTL;
+   END_VAR
+
+
+BEGIN
+	// This function shouldn't be used with periodical interupts that has longer
+	// cycles then 50 secounds.
+	
+	// Operating time.
+	// (Max value: 2^32 / (24 * 60*60 * 365) = 136 => 136 years.)
+	#e := RD_SYS_T(#rdSysT);
+	#opr.operatingTime +=
+	SEL(G := #in, IN0 := 0, IN1 := (#rdSysT.SECOND - #opr.oldSec + 60) MOD 60);
+	#opr.oldSec := #rdSysT.SECOND;
+	
+	// Start cnt.
+	#opr.startCnt += BOOL_TO_UDINT(#in AND NOT #opr.in);
+	#opr.in := #in;
+	
+	
+END_FUNCTION
+
+FUNCTION_BLOCK "motorValveAnalogWrapper"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      iFeedbackPosition { ExternalWritable := 'False'} : Real;
+      iFeddbackPosError : Bool;
+      iFeedbackFullyOpen { ExternalWritable := 'False'} : Bool;
+      iFeedbackFullyClosed : Bool;
+   END_VAR
+
+   VAR_OUTPUT 
+      qOpen : Bool;
+      qClose : Bool := false;
+   END_VAR
+
+   VAR RETAIN
+      hmi : "valveHmiUdt";
+   END_VAR
+   VAR 
+      valve : "motorValveAnalog";
+      SP : Real;
+      SP_auto : Real;
+      valveAproxPos : "motorValveAproxPos";
+   END_VAR
+
+
+BEGIN
+	// Valve with analog feedback.
+	
+	// Input mapping
+	#hmi.io.in.pos := #iFeedbackPosition;
+	#hmi.io.in.posError := #iFeddbackPosError;
+	#hmi.io.in.fullyOpen := #iFeedbackFullyOpen;
+	#hmi.io.in.fullyClosed := #iFeedbackFullyClosed;
+	
+	// #valveAproxPos(#hmi.io); // Not finished, but also not needed.
+	
+	// Man/auto
+	IF #hmi.cmd.jogOpen XOR #hmi.cmd.jogClose THEN
+	    #hmi.cmd.man := true;
+	    #SP := #iFeedbackPosition;
+	ELSIF #hmi.cmd.openFully XOR #hmi.cmd.closeFully  THEN
+	    #hmi.cmd.man := true;
+	    #SP := SEL(G := #hmi.cmd.openFully, IN0 := 0, IN1 := 100);
+	ELSIF #hmi.cmd.man THEN
+	    #SP := #hmi.SP;
+	ELSE
+	    #SP := #SP_auto;
+	    // If auto is controlled by a pid then the line bellow should be disabled, 
+	    // if auto is controlled by a state machine the line bewllow may be enabled.
+	    // #hmi.conf.spAvoidDeadLook := true;
+	END_IF;
+	#hmi.SP := #valve.iSP := #SP_auto := #SP;
+	
+	
+	#valve(// iSP:=0.0,
+	       // iFailSafe:=false,
+	       // iInterlook:=false,
+	       // iStop:=false,
+	       iJogOpen := #hmi.cmd.jogOpen,
+	       iJogClose := #hmi.cmd.jogClose,
+	       iReset := #hmi.cmd.reset,
+	       qTimeout => #hmi.error.timeout,
+	       conf := #hmi.conf,
+	       io := #hmi.io);
+	
+	// Outputs
+	#qOpen := #hmi.io.out.open;
+	#qClose := #hmi.io.out.close;
+	
+	// Position error
+	#hmi.error.posError :=
+	#iFeedbackFullyOpen AND #iFeedbackFullyClosed
+	OR #iFeedbackFullyOpen
+	(* *)AND #iFeedbackPosition < #hmi.conf.fullyOpenPosLim - #hmi.conf.regModeMinOffset
+	(* *)AND NOT #hmi.conf.simFullyOpenWithPos
+	OR #iFeedbackFullyClosed
+	(* *)AND #iFeedbackPosition > #hmi.conf.fullyClosedPosLim + #hmi.conf.regModeMinOffset
+	(* *)AND NOT #hmi.conf.simFullyClosedWithPos;
+	
+	// Count secounds the valve has been operating, and number of starts.
+	"operatingTime"(in := #qOpen XOR #qClose, opr := #hmi.operatingTime);
+	
+	// Reset signals.
+	#hmi.cmd.jogOpen := false;
+	#hmi.cmd.jogClose := false;
+	#hmi.cmd.openFully := false;
+	#hmi.cmd.closeFully := false;
+	#hmi.cmd.reset := false;
+	
+END_FUNCTION_BLOCK
+
+FUNCTION "analogInSimple" : Real
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      mn : Real;
+      in : Int;
+      mx : Real;
+   END_VAR
+
+   VAR_TEMP 
+      t : Real;
+   END_VAR
+
+
+BEGIN
+	// Analog in 
+	
+	#t := NORM_X(MIN := 0, VALUE := #in, MAX := 27648);
+	#t := LIMIT(MN := 0, IN := #t, MX := 1);
+	#analogInSimple := SCALE_X_INT(MIN := #mn, VALUE := #t, MAX := #mx);
+	
+	// ( https://github.com/rexhip/ )
+END_FUNCTION
+
+FUNCTION "analogInError" : Bool
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      in : Int;
+   END_VAR
+
+   VAR_TEMP 
+      t : Real;
+   END_VAR
+
+
+BEGIN
+	// Analog in error (outside limits.)
+	#analogInError := #in < -4864 OR #in > 32512;;
+	
+END_FUNCTION
+
+FUNCTION_BLOCK "motorValveDigital"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      iAction : SInt;   // 0=no-action, 1=Open, 2=Close
+      iFailSafe : Bool;   // Open or close the valve entirly, set inside conf.
+      iInterlook : Bool;   // Stop movement, valve will continue when input is set back false.
+      iStop : Bool;   // Stop movement, also after var. is back false.
+      iJogOpen : Bool;   // Move the valve towards open when true, has priority over SP.
+      iJogClose : Bool;   // Move the valve towards close when true, has priority over SP.
+      iReset : Bool;   // Reset timeout.
+   END_VAR
+
+   VAR_OUTPUT 
+      qTimeout : Bool;   // (quick and long timeout)
+   END_VAR
+
+   VAR_IN_OUT 
+      conf : "valveAnalogConfUdt";   // Configuration parameters
+      io : "valveIoUdt";   // Fyzical in- and outputs.
+   END_VAR
+
+   VAR 
+      action : SInt;   // 1=open, 2=close
+      actionOut : SInt;
+      oldAction : SInt;
+      oldActionOut : SInt;
+      RTIRG_iFailSafe {OriginalPartName := 'R_TRIG_1200'; LibVersion := '1.0'; ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : R_TRIG;
+      RTIRG_iReset {OriginalPartName := 'R_TRIG_1200'; LibVersion := '1.0'; ExternalWritable := 'False'} : R_TRIG;
+      RTIRG_jog {OriginalPartName := 'R_TRIG_1200'; LibVersion := '1.0'; ExternalWritable := 'False'} : R_TRIG;
+      TP_toggleOut {OriginalPartName := 'IEC_TIMER'; LibVersion := '1.0'; ExternalWritable := 'False'} : IEC_TIMER;
+      TON_gentle {OriginalPartName := 'IEC_TIMER'; LibVersion := '1.0'; ExternalWritable := 'False'} : IEC_TIMER;
+      TONR_gentle {OriginalPartName := 'IEC_TIMER'; LibVersion := '1.0'} : IEC_TIMER;
+      TONR_timeout {OriginalPartName := 'IEC_TIMER'; LibVersion := '1.0'; ExternalWritable := 'False'} : IEC_TIMER;
+      TON_regModeWait {OriginalPartName := 'IEC_TIMER'; LibVersion := '1.0'; ExternalWritable := 'False'} : IEC_TIMER;
+      gentleAction { ExternalWritable := 'False'} : Bool;
+   END_VAR
+
+   VAR_TEMP 
+      reset : Bool;
+   END_VAR
+
+   VAR CONSTANT 
+      NO_ACTION : SInt := 0;
+      OPEN : SInt := 1;
+      CLOSE : SInt := 2;
+   END_VAR
+
+
+BEGIN
+	// Valve 
+	
+	//R-TRIG'S
+	#RTIRG_iReset(CLK := #iReset);
+	#RTIRG_iFailSafe(CLK := #iFailSafe); // Reset timeout once on failSafe.
+	#RTIRG_jog(CLK := #iJogOpen XOR #iJogClose);
+	
+	REGION Timeout-and-reset
+	    // Max time the valve can operate before timeout, and the valve will stop.
+	    #TONR_timeout.TONR(IN := #io.out.open OR #io.out.close,
+	                       PT := #conf.longTimeout,
+	                       Q => #qTimeout);
+	    
+	    // Reset timeout
+	    IF #iJogOpen OR #iJogClose THEN
+	        #reset := #RTIRG_jog.Q AND (#conf.autoReset OR NOT #qTimeout) ;    
+	    END_IF;
+	    IF #RTIRG_iReset.Q OR #RTIRG_iFailSafe.Q OR #reset THEN
+	        RESET_TIMER(#TONR_timeout);
+	        #qTimeout := false;
+	    END_IF;
+	END_REGION
+	
+	REGION Decide
+	    // Error, timeout, failSafe and Interlook.
+	    IF #TONR_timeout.Q THEN
+	        #action := #NO_ACTION;
+	    ELSIF #iFailSafe THEN // Timeout will be reseted once if iFailSafe is activated.
+	        #action := #conf.feilSafeAction;
+	    ELSIF #iStop THEN
+	        #action := #NO_ACTION;
+	        // ==========================================================================
+	        // JOG-mode
+	    ELSIF #iJogOpen OR #iJogClose THEN
+	        // Open or close the valve little by little. When either of the jog
+	        // inputs are true. This way of controlling the valve has priority
+	        // over setpoint (bellow).
+	        RESET_TIMER(#TON_regModeWait);
+	        IF #iJogOpen AND #iJogClose THEN
+	            #action := #NO_ACTION;
+	        ELSIF #iJogOpen THEN
+	            #action := #OPEN;
+	        ELSIF #iJogClose THEN
+	            #action := #CLOSE;
+	        ELSE
+	            ;
+	        END_IF;
+	    END_IF;
+	END_REGION
+	
+	REGION Gentle
+	    // If a big valve closes or open to fast, it can damage the pipes or other
+	    // equipment. This section make time breaks on closing or opening. 
+	    IF #io.in.pos < #conf.gentleActivteLowLimit // ->
+	        // -> The function is only active under a ceratain position limit.
+	        AND (NOT #iFailSafe OR #conf.gentleAlsoOnFailSafe)
+	        // AlsoOnFailSafe: It's possible to disable the function for emergencies
+	        // by setting the value false.
+	        AND (#conf.gentleOpenEnable AND #action = #OPEN
+	        (* *)OR #conf.gentleOpenEnable AND #action = #CLOSE)
+	    THEN
+	        #TON_gentle.TON(IN := true,
+	                        PT := SEL(G := #gentleAction, // Toggle times
+	                                  IN0 := #conf.gentleTimeRun,
+	                                  IN1 := #conf.gentleTimePause));
+	        IF #TON_gentle.Q THEN
+	            #gentleAction := NOT #gentleAction;
+	            RESET_TIMER(#TON_gentle);
+	        END_IF;
+	        #actionOut := SEL(G := #gentleAction, // Toggle action
+	                         IN0 := #action, IN1 := #NO_ACTION);
+	    ELSE
+	        RESET_TIMER(#TON_gentle);
+	        #gentleAction := false;
+	        // If the carefully-function is disabled, then just forward
+	        // the action value to the next stage.
+	        #actionOut := #action; 
+	    END_IF;
+	END_REGION
+	
+	REGION Output
+	    // Make a smal time break when valve change direction. This make sure that
+	    // that both outputs are not active at the same time.
+	    #TP_toggleOut.TP(IN := #actionOut <> #oldActionOut AND #oldActionOut <> #NO_ACTION,
+	                  PT := #conf.toggleTimeBreak);
+	    // Outputs
+	    IF #TP_toggleOut.Q THEN
+	        #io.out.open := false;
+	        #io.out.close := false;
+	    ELSIF #iFailSafe THEN
+	        #io.out.open := #conf.feilSafeAction = #OPEN AND NOT #io.in.fullyOpen;
+	        #io.out.close := #conf.feilSafeAction = #CLOSE AND NOT #io.in.fullyClosed ;
+	    ELSIF #iInterlook OR #iStop THEN
+	        #io.out.open := false;
+	        #io.out.close := false;
+	    ELSE
+	        #io.out.open := #actionOut = #OPEN AND NOT #io.in.fullyOpen;
+	        #io.out.close := #actionOut = #CLOSE AND NOT #io.in.fullyClosed;
+	    END_IF;
+	END_REGION
+	
+	REGION Old
+	    #oldAction := #action;
+	    #oldActionOut := #actionOut;
+	END_REGION
+	
+END_FUNCTION_BLOCK
+
+FUNCTION_BLOCK "example_motorValveAnalog"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      ai_valve1Pos : Int;
+      di_valve1FullyOpen : Bool;
+      di_valve1FullyClosed : Bool;
+   END_VAR
+
+   VAR_OUTPUT 
+      do_valve1Open : Bool;
+      do_valve1Close : Bool;
+   END_VAR
+
+   VAR 
+      valve1 : "valveAnalogWrapper";
+   END_VAR
+
+
+BEGIN
+	
+	
+	// Valve 1
+	#valve1(iFeedbackPosition := "analogInSimple"(mn := 0, in := #ai_valve1Pos, mx := 100),
+	        iFeddbackPosError := "analogInError"(#ai_valve1Pos),
+	        iFeedbackFullyOpen := #di_valve1FullyOpen,
+	        iFeedbackFullyClosed := #di_valve1FullyClosed,
+	        qOpen => #do_valve1Open,
+	        qClose => #do_valve1Close );
+	
+	// Vavle 2
+	// ....
+	// 
+	
+END_FUNCTION_BLOCK
+
