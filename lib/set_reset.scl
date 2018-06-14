@@ -1,4 +1,4 @@
-﻿FUNCTION "set_reset_rd" : Void
+﻿FUNCTION "setReset_rd" : Void
 { S7_Optimized_Access := 'TRUE' }
 VERSION : 0.1
    VAR_INPUT 
@@ -22,7 +22,7 @@ BEGIN
 	
 END_FUNCTION
 
-FUNCTION "set_reset_sd" : Void
+FUNCTION "setReset_sd" : Void
 { S7_Optimized_Access := 'TRUE' }
 VERSION : 0.1
    VAR_INPUT 
@@ -69,3 +69,43 @@ BEGIN
 	#memory := #var2;
 	
 END_FUNCTION
+
+
+FUNCTION_BLOCK "setResetTimer"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      in : Bool;
+      pt : Time;
+      set : Bool;
+      reset : Bool;
+   END_VAR
+
+   VAR_OUTPUT DB_SPECIFIC
+      q : Bool;
+   END_VAR
+
+   VAR 
+      "timer" {OriginalPartName := 'IEC_TIMER'; LibVersion := '1.0'} : IEC_TIMER;
+      timer_q : Bool;
+   END_VAR
+
+
+BEGIN
+	// Once the timer has elapsed, the output
+	// will stay true until it's reset.
+	
+	#timer.TON(IN := #in, PT := #pt, Q => #timer_q);
+	
+	IF #set THEN
+	    #q := true;
+	ELSIF #reset THEN
+	    #q := false;
+	ELSIF #timer_q THEN
+	    #q := true;
+	END_IF;
+	
+END_FUNCTION_BLOCK
+
+
+
