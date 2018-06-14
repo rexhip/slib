@@ -176,3 +176,29 @@ BEGIN
 	
 END_ORGANIZATION_BLOCK
 
+
+FUNCTION "timerGoto" : Void
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      pt : Time;
+      goto : Int;
+   END_VAR
+
+   VAR_IN_OUT 
+      state : Int;
+      "timer" : "stateMachineTimer";
+   END_VAR
+
+
+BEGIN
+	// sTimer
+	// Make a timer, a one liner, in a state macine
+	
+	#timer.pt := #pt;
+	IF #timer.q THEN
+	    #state := #goto;
+	END_IF;
+	
+END_FUNCTION
+
