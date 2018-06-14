@@ -1,4 +1,4 @@
-﻿FUNCTION_BLOCK "state_machine_timer"
+﻿FUNCTION_BLOCK "stateMachineTimer"
 { S7_Optimized_Access := 'TRUE' }
 VERSION : 0.1
    VAR_INPUT 
@@ -63,7 +63,7 @@ BEGIN
 	
 	IF #t.DAY <> 0 THEN
 	    #time2str := CONCAT(IN1 := RIGHT(IN := USINT_TO_STRING(#t.DAY),
-	                                     L := 1 + BOOL_TO_INT(#t.DAY > 9)),
+	                                                         L := 1 + BOOL_TO_INT(#t.DAY > 9)),
 	                        IN2 := 'd ');
 	END_IF;
 	IF #t.HOUR <> 0 OR LEN(#time2str) <> 0 THEN
@@ -85,47 +85,94 @@ BEGIN
 	
 END_FUNCTION
 
-FUNCTION_BLOCK "example_state_machine"
+FUNCTION "sTimer" : Bool
 { S7_Optimized_Access := 'TRUE' }
 VERSION : 0.1
-   VAR 
-      state : Int;
-      "timer" : "state_machine_timer";
-      "__condition_1__" : Bool := true;
-      "__condition_2__" : Bool := true;
-      HMI_status : String[50];
+   VAR_INPUT 
+      pt : Time;
+   END_VAR
+
+   VAR_IN_OUT 
+      t : "stateMachineTimer";
    END_VAR
 
 
 BEGIN
-	// https://github.com/rexhip/
-	// State machine example.
+	// sTimer
+	// Make a timer, a one liner, in a state macine
+	
+	#t.pt := #pt;
+	#sTimer := #t.q;
+	
+END_FUNCTION
+
+FUNCTION_BLOCK "example_stateMachine"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      state : Int;
+      timer1 : "stateMachineTimer";
+      timer2 : "stateMachineTimer";
+      "__condition_1__" : Bool := TRUE;
+      "__condition_2__" : Bool := TRUE;
+      HMI_status : String[100];
+   END_VAR
+
+
+BEGIN
+	// State machine with timer example. (https://github.com/rexhip/)
 	
 	CASE #state OF
-	    0:  // Next state after 14 sec.
-	        #timer.pt := T#14s; 
-	        #state += BOOL_TO_INT(#timer.q);
+	    0:  // Next state after 14 sec. Note that the timer is only one line of code.
+	        #state += BOOL_TO_INT("sTimer"(pt := T#14s, t := #timer1));
 	        
 	        #HMI_status := CONCAT(IN1 := 'State 0, remaining time: ',
-	                              IN2 := "time2str"(#timer.rt), IN3 := '.');
+	                              IN2 := "time2str"(#timer1.rt), IN3 := '.');
 	        
-	    1:  // Next state after 7 sec, and 'condition_1' is true.
-	        #timer.pt := T#7s;
-	        #state += BOOL_TO_INT(#timer.q AND #"__condition_1__");
+	    1:  // Next state after 7 sec, and '__condition_1__' is true.
+	        #timer1.pt := T#7s;
+	        #state += BOOL_TO_INT(#timer1.q AND #"__condition_1__");
 	        
-	        #HMI_status := 'State 1.';
+	        // Back to stae 0 if 50 sec elapses. A timer can be used once in each state,
+	        // therfor timer2 used for this condition. Note the ":=" and not "+=" as above.
+	        #state := SEL(G := "sTimer"(pt := T#50s, t := #timer2), IN0 := #state, IN1 := 0);
 	        
-	    2:  // Back to state 0, when 'condition_2' has been true
-	        // for 8 sec continuously.
+	        #HMI_status := CONCAT(IN1 := 'State 1, Timer1 ', IN2 := "time2str"(#timer1.rt),
+	                              IN3 := ', Timer2 ', IN4 := "time2str"(#timer2.rt));
+	        
+	    2:  // Back to state 0, when '__condition_2__' has been true for 8 sec continuously.
+	        // The sTimer FC could have been used here also, but for the sake of the
+	        // example it isn't.
 	        IF #"__condition_2__" THEN
-	            #timer.pt := T#8s;
-	            #state := SEL(G := #timer.q, IN0 := #state, IN1 := 0);
+	            #timer1.pt := T#8s;
+	            #state := SEL(G := #timer1.q, IN0 := #state, IN1 := 0);
 	        END_IF;
 	        
 	        #HMI_status := 'State 2.';
 	END_CASE;
 	
-	#timer(state := #state); // Run the timer code.
+	#timer1(state := #state); // Run the timer code.
+	#timer2(state := #state);
 	
 END_FUNCTION_BLOCK
+
+DATA_BLOCK "example_stateMachine_DB"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+NON_RETAIN
+"example_stateMachine"
+
+BEGIN
+
+END_DATA_BLOCK
+
+ORGANIZATION_BLOCK "example_stateMachine_OB"
+TITLE = "Main Program Sweep (Cycle)"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+
+BEGIN
+	"example_stateMachine_DB"();
+	
+END_ORGANIZATION_BLOCK
 
