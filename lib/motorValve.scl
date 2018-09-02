@@ -804,3 +804,63 @@ BEGIN
 	
 END_FUNCTION_BLOCK
 
+
+FUNCTION_BLOCK "pulsValve"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      iOpening : Bool;
+      iCloses : Bool;
+      iPuls : Bool;
+      iFullyOpen : Bool;
+      iFullyClosed : Bool;
+      iConfTimeout : Time := T#3s;
+      iConfPulsesBetweenOpenAndClosed : Int := 100;
+   END_VAR
+
+   VAR_OUTPUT 
+      qPos : Real;
+      qUnknownPos : Bool;
+   END_VAR
+
+   VAR 
+      cnt : Int;
+      RTRIG_puls {OriginalPartName := 'R_TRIG_1200'; LibVersion := '1.0'} : R_TRIG;
+      "timer" {OriginalPartName := 'IEC_TIMER'; LibVersion := '1.0'} : IEC_TIMER;
+      first_scan : Bool := true;
+   END_VAR
+
+
+BEGIN
+	// Valve position based on puls feedback 
+	// 
+	
+	#RTRIG_puls(CLK := #iPuls);
+	
+	#timer.TON(IN := (#iOpening OR #iCloses) AND NOT #RTRIG_puls.Q,
+	           PT := #iConfTimeout);
+	
+	IF #timer.Q OR #first_scan THEN
+	    #qUnknownPos := true;
+	END_IF;
+	
+	IF #iFullyOpen THEN
+	    #cnt := #iConfPulsesBetweenOpenAndClosed;
+	    #qUnknownPos := false;
+	ELSIF #iFullyClosed THEN
+	    #cnt := 0;
+	    #qUnknownPos := false;
+	ELSE
+	    IF #iOpening AND #iCloses THEN
+	        ; // No action
+	    ELSIF #RTRIG_puls.Q THEN
+	        #cnt += BOOL_TO_INT( #iOpening );
+	        #cnt -= BOOL_TO_INT( #iCloses );
+	    END_IF;
+	END_IF;
+	
+	#qPos := INT_TO_REAL( #cnt ) / INT_TO_REAL( #iConfPulsesBetweenOpenAndClosed ) * 100;
+	#first_scan := false;
+END_FUNCTION_BLOCK
+
+
