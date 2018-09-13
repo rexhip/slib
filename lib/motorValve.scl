@@ -385,7 +385,7 @@ BEGIN
 	        // AlsoOnFailSafe: It's possible to disable the function for emergencies
 	        // by setting the value false.
 	        AND (#conf.gentleOpenEnable AND #action = #OPEN
-	        (* *)OR #conf.gentleOpenEnable AND #action = #CLOSE)
+	        (* *)OR #conf.#conf.gentleCloseEnable AND #action = #CLOSE)
 	    THEN
 	        #TON_gentle.TON(IN := true,
 	                        PT := SEL(G := #gentleAction, // Toggle times
