@@ -233,6 +233,9 @@ VERSION : 0.1
 BEGIN
 	// Valve with analog feedback.
 	
+	// This block doesn't include any functionality for auto-man, the reason for this	
+	// is because this functionality varies from project to project.
+	
 	REGION End-pos-switches
 	    // Use the position signal instead of the end-limit-switches to 
 	    // determined if the valve is fully open or fully closed.
